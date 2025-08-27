@@ -25,12 +25,31 @@ C = 343.0  # Speed of sound (m/s)
 # -------------------------
 
 def equilateral_triangle(side_len, center):
-    """Equilateral triangle array (2D)."""
+    """Equilateral triangle array (2D) with 3 microphones."""
+    # For equilateral triangle, circumradius R = side_len / √3
     R = side_len / np.sqrt(3)
-    angles = np.deg2rad([90, 210, 330])
-    xy = np.stack([R * np.cos(angles), R * np.sin(angles)], axis=0)
+    
+    # 120° separation between microphones
+    angles = np.deg2rad([90, 210, 330])  # 0°, 120°, 240° from vertical
+    
+    x = R * np.cos(angles)
+    y = R * np.sin(angles)
+    
+    # Create the array
+    xy = np.vstack([x, y])
+    
+    # Center the array at (0,0)
     centroid = np.mean(xy, axis=1, keepdims=True)
-    return xy - centroid + np.array(center).reshape(2, 1)
+    centered_xy = xy - centroid
+    
+    # Move to the specified center position
+    final_xy = centered_xy + np.array(center).reshape(2, 1)
+    
+    print(f"Microphone positions (shape: {final_xy.shape}):")
+    for i in range(final_xy.shape[1]):
+        print(f"  Mic {i+1}: ({final_xy[0, i]:.3f}, {final_xy[1, i]:.3f})")
+    
+    return final_xy
 
 def wideband_chirp(fs, duration, f0=300, f1=4000):
     """Wideband chirp signal."""
@@ -65,6 +84,10 @@ def plot_room_setup(room_dim, array_center, mic_xy, src_pos, theta_deg, ax):
     ax.add_patch(plt.Rectangle((0, 0), room_dim[0], room_dim[1], 
                              fill=False, edgecolor='black', linewidth=2))
     
+    # Verify we have 3 microphones
+    if mic_xy.shape[1] != 3:
+        print(f"WARNING: Expected 3 microphones, got {mic_xy.shape[1]}")
+    
     # Plot microphones
     ax.scatter(mic_xy[0], mic_xy[1], s=100, c='red', marker='^', label='Microphones')
     for i, (x, y) in enumerate(zip(mic_xy[0], mic_xy[1])):
@@ -76,6 +99,11 @@ def plot_room_setup(room_dim, array_center, mic_xy, src_pos, theta_deg, ax):
     
     # Plot array center
     ax.scatter(array_center[0], array_center[1], s=50, c='green', marker='o', label='Array Center')
+    
+    # Draw lines from center to each microphone
+    for i in range(mic_xy.shape[1]):
+        ax.plot([array_center[0], mic_xy[0, i]], [array_center[1], mic_xy[1, i]], 
+               'k--', alpha=0.3, linewidth=1)
     
     # Draw line from center to source
     ax.plot([array_center[0], src_pos[0]], [array_center[1], src_pos[1]], 
@@ -89,13 +117,19 @@ def plot_signals(signals, fs, axs):
     time = np.arange(signals.shape[1]) / fs
     colors = ['red', 'green', 'blue']
     
-    for i in range(signals.shape[0]):
+    # Plot each microphone signal on its own axis
+    for i in range(min(signals.shape[0], len(axs))):  # Use whichever is smaller
         axs[i].plot(time, signals[i], color=colors[i], linewidth=1)
         axs[i].set_title(f'Microphone {i+1} Signal')
         axs[i].set_xlabel('Time (s)')
         axs[i].set_ylabel('Amplitude')
         axs[i].grid(True, alpha=0.3)
         axs[i].set_xlim(0, time[-1])
+    
+    # Hide any unused axes (only if we have more axes than signals)
+    for i in range(signals.shape[0], len(axs)):
+        if i < len(axs):  # Safety check
+            axs[i].set_visible(False)
 
 def plot_doa_results(doa, true_theta, ax):
     """Plot DOA results with pseudospectrum"""
@@ -230,9 +264,6 @@ def music_doa(signals, fs, mic_positions, num_src=1, nfft=512):
     debug_doa_object(doa)
     
     return doa
-# -------------------------
-# Dataset generator with visualization
-# -------------------------
 
 # -------------------------
 # Dataset generator with visualization
@@ -264,10 +295,6 @@ def generate_dataset_with_plots(
     all_estimates = []
     all_true = []
 
-    # Create summary figure
-    if show_plots or save_plots:
-        summary_fig, summary_ax = plt.subplots(1, 2, figsize=(15, 6))
-
     # Loop over different azimuths
     for i, theta in enumerate(np.linspace(0, 2 * np.pi, num_angles, endpoint=False)):
         theta_deg = np.rad2deg(theta)
@@ -281,6 +308,8 @@ def generate_dataset_with_plots(
         mic_array = pra.MicrophoneArray(mic_xy, fs)
         room.add_microphone_array(mic_array)
 
+        print(f"Microphone array shape: {mic_xy.shape}")  # Should be (2, 3)
+
         # Source position (circle around array)
         src_x = array_center[0] + source_radius * np.cos(theta)
         src_y = array_center[1] + source_radius * np.sin(theta)
@@ -292,11 +321,12 @@ def generate_dataset_with_plots(
         # Simulate
         room.simulate()
         sigs = add_awgn(room.mic_array.signals, snr_db)
+        print(f"Signals shape: {sigs.shape}")  # Should be (3, num_samples)
 
         # Convert 2D mic positions to 3D by adding z=0
         mic_positions_3d = np.vstack([mic_xy, np.zeros(mic_xy.shape[1])])
         
-        # MUSIC DOA estimation - FIXED THIS PART
+        # MUSIC DOA estimation
         doa = music_doa(sigs, fs, mic_positions_3d)
 
         if doa is None:
@@ -344,14 +374,14 @@ def generate_dataset_with_plots(
 
         # Create detailed plot for this angle
         if (show_plots or save_plots) and (i % 4 == 0):  # Plot every 4th angle
-            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+            # Create 4x1 vertical layout to show all 3 microphone signals
+            fig, ((ax1, ax2, ax3, ax4)) = plt.subplots(4, 1, figsize=(12, 16))
             
             # Plot 1: Room setup
             plot_room_setup(room_dim, array_center, mic_xy, src_pos, theta_deg, ax1)
             
-            # Plot 2: Microphone signals
+            # Plot 2: Microphone signals (all 3 microphones)
             plot_signals(sigs, fs, [ax2, ax3, ax4])
-            ax4.set_visible(False)  # Hide the 4th subplot for 3 mics
             
             plt.tight_layout()
             if save_plots:
@@ -380,8 +410,10 @@ def generate_dataset_with_plots(
     np.save(os.path.join(out_dir, "pseudospectra.npy"), pseudospectra)
     np.save(os.path.join(out_dir, "labels.npy"), labels)
 
-    # Create summary plots
+    # CREATE SUMMARY FIGURES AT THE END (after all data is collected)
     if show_plots or save_plots:
+        summary_fig, summary_ax = plt.subplots(1, 2, figsize=(15, 6))
+        
         # Plot 1: True vs Estimated angles
         summary_ax[0].scatter(all_true, all_estimates, alpha=0.7)
         summary_ax[0].plot([0, 360], [0, 360], 'r--', label='Perfect estimation')
@@ -410,18 +442,15 @@ def generate_dataset_with_plots(
             plt.savefig(os.path.join(out_dir, 'summary_results.png'), dpi=300, bbox_inches='tight')
         if show_plots:
             plt.show()
-        else:
-            plt.close()
 
     print(f"✅ Dataset generated: {pseudospectra.shape} spectra")
-    print(f"   Mean estimation error: {np.mean(errors):.2f}°")
-    print(f"   Max estimation error: {np.max(errors):.2f}°")
+    if errors:  # Only print errors if we have them
+        print(f"   Mean estimation error: {np.mean(errors):.2f}°")
+        print(f"   Max estimation error: {np.max(errors):.2f}°")
     print(f"   Results saved in {out_dir}/")
-
 # -------------------------
 # ML Implementation and Evaluation
 # -------------------------
-
 def train_and_evaluate_ml_model(data_dir="dataset"):
     """Train and evaluate ML model on the DOA dataset"""
     try:
@@ -435,10 +464,10 @@ def train_and_evaluate_ml_model(data_dir="dataset"):
         # Convert labels to degrees for easier interpretation
         labels_deg = np.rad2deg(labels)
         
-        # Simple ML model (you can replace this with more complex models)
+        # Simple ML model
         from sklearn.ensemble import RandomForestRegressor
         from sklearn.model_selection import train_test_split
-        from sklearn.metrics import mean_absolute_error, mean_squared_error
+        from sklearn.metrics import mean_absolute_error
         
         # Split data
         X_train, X_test, y_train, y_test = train_test_split(
@@ -489,17 +518,20 @@ def train_and_evaluate_ml_model(data_dir="dataset"):
         ax2.set_title(f'ML Model Error Distribution\nMAE: {np.mean(errors):.2f}°')
         ax2.grid(True, alpha=0.3)
         
-        # Comparison with MUSIC
+        # Comparison with MUSIC - FIXED THIS PART
         music_errors = []
-        for i in range(len(y_test)):
-            true = y_test[i]
-            # Find corresponding MUSIC estimation
-            idx = np.where(labels_deg == true)[0][0]
-            music_est = np.rad2deg(labels[np.argmax(pseudospectra[idx])])
-            error = abs(music_est - true)
+        music_estimates = []
+        for i in range(len(pseudospectra)):
+            true_angle = labels_deg[i]
+            # Get the MUSIC estimate by finding the peak in pseudospectrum
+            peak_index = np.argmax(pseudospectra[i])
+            # Convert peak index (0-359) to degrees (0-360)
+            music_est = (peak_index / 360) * 360
+            error = abs(music_est - true_angle)
             if error > 180:
                 error = 360 - error
             music_errors.append(error)
+            music_estimates.append(music_est)
         
         # Error comparison
         ax3.boxplot([errors, music_errors], labels=['ML Model', 'MUSIC'])
@@ -507,18 +539,16 @@ def train_and_evaluate_ml_model(data_dir="dataset"):
         ax3.set_title('Error Comparison: ML vs MUSIC')
         ax3.grid(True, alpha=0.3)
         
-        # Sample predictions
-        sample_idx = np.random.choice(len(y_test), min(8, len(y_test)), replace=False)
-        angles = np.arange(360)
+        # Sample predictions - show a few examples
+        sample_indices = np.random.choice(len(X_test), min(4, len(X_test)), replace=False)
         
-        for i, idx in enumerate(sample_idx):
-            if i < 4:  # First 4 samples
-                ax = ax4
-            else:  # Next 4 samples (would need another subplot)
-                continue
-                
-            ax.plot(angles, pseudospectra[idx], alpha=0.7, 
+        for i, idx in enumerate(sample_indices):
+            # Find the original index in the full dataset
+            original_idx = np.where(labels_deg == y_test[idx])[0][0]
+            ax4.plot(np.arange(360), pseudospectra[original_idx], alpha=0.7, 
                    label=f'True: {y_test[idx]:.0f}°, Pred: {y_pred[idx]:.0f}°')
+            ax4.axvline(y_test[idx], color='red', linestyle='--', alpha=0.7)
+            ax4.axvline(y_pred[idx], color='green', linestyle='--', alpha=0.7)
         
         ax4.set_xlabel('Azimuth (degrees)')
         ax4.set_ylabel('Normalized Pseudospectrum')
@@ -530,15 +560,25 @@ def train_and_evaluate_ml_model(data_dir="dataset"):
         plt.savefig(os.path.join(data_dir, 'ml_results.png'), dpi=300, bbox_inches='tight')
         plt.show()
         
+        # Print MUSIC performance for comparison
+        print(f"\nMUSIC Algorithm Performance:")
+        print(f"  Mean Error: {np.mean(music_errors):.2f}°")
+        print(f"  Max Error: {np.max(music_errors):.2f}°")
+        print(f"  Accuracy within 5°: {np.mean(np.array(music_errors) <= 5)*100:.1f}%")
+        print(f"  Accuracy within 10°: {np.mean(np.array(music_errors) <= 10)*100:.1f}%")
+        
         return model, errors
         
     except Exception as e:
         print(f"Error in ML training: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
-
+    
 # -------------------------
 # Run example
 # -------------------------
+
 
 if __name__ == "__main__":
     # Generate dataset with plots
@@ -555,4 +595,14 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("TRAINING MACHINE LEARNING MODEL")
     print("="*60)
-    model, errors = train_and_evaluate_ml_model("dataset")
+    
+    try:
+        model, errors = train_and_evaluate_ml_model("dataset")
+        if model is not None:
+            print("✅ ML training completed successfully!")
+        else:
+            print("❌ ML training failed")
+    except Exception as e:
+        print(f"❌ ML training failed with error: {e}")
+        import traceback
+        traceback.print_exc()
