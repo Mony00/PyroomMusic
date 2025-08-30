@@ -24,8 +24,9 @@ room.add_source(source_position, signal=audio, delay=0.5)
 
 # Define the locations of the microphones
 mic_locs = np.array([
-    [6.3, 4.47, 1.2],  # Mic 1
-    [6.3, 5, 1.2]     # Mic 2
+    [4.000, 5.577, 1.0],  # Microphone 1
+    [3.567, 4.711, 1.0],  # Microphone 2
+    [4.433, 4.711, 1.0]   # Microphone 3
 ]).T
 
 # Define microphone array
